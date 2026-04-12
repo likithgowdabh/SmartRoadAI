@@ -167,12 +167,17 @@ def fetch_query(query: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             # Tables haven't been created yet — initialise and retry once.
-            init_db()
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(query, tuple(params))
-                return cur.fetchall()
+            try:
+                init_db()
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(query, tuple(params))
+                    return cur.fetchall()
+            except Exception:
+                # DB truly unavailable (read-only fs, etc.) — return empty.
+                return []
         raise
+
 
 
 def fetch_recent_logs(limit: int = 50) -> pd.DataFrame:

@@ -301,13 +301,27 @@ def render_analytics_panel(
         key="pred_threshold",
     )
 
-    pred = predict_for_machine(
-        active_machine,
-        current_temp=current_temp,
-        current_vib=current_vib,
-        current_volt=current_volt,
-        risk_threshold_pct=float(thr),
-    )
+    _pred_fallback = {
+        "failure_probability_pct": 0,
+        "estimated_ttf_hours": "N/A",
+        "source": "unavailable",
+        "warn": False,
+    }
+    try:
+        pred = predict_for_machine(
+            active_machine,
+            current_temp=current_temp,
+            current_vib=current_vib,
+            current_volt=current_volt,
+            risk_threshold_pct=float(thr),
+        )
+    except Exception as _pred_err:
+        pred = _pred_fallback
+        st.warning(
+            f"⚠️ Prediction model unavailable: {_pred_err}. "
+            "Run the dashboard for a few cycles to collect training data.",
+            icon="🤖",
+        )
 
     pct_clr = "#f87171" if pred["failure_probability_pct"] >= thr else "#34d399"
     p1, p2, p3 = st.columns(3)

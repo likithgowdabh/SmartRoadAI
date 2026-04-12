@@ -150,11 +150,17 @@ def _load_model() -> Optional[dict[str, Any]]:
 
 
 def _features_for_latest(machine_id: str, history_points: int = 120) -> Optional[np.ndarray]:
-    md = fetch_machine_series_chronological(limit=history_points, machine_id=machine_id)
+    try:
+        md = fetch_machine_series_chronological(limit=history_points, machine_id=machine_id)
+    except Exception:
+        return None
     if md.empty or len(md) < 3:
         return None
 
-    an = fetch_recent_anomalies(limit=2000)
+    try:
+        an = fetch_recent_anomalies(limit=2000)
+    except Exception:
+        an = pd.DataFrame()
     md = md.copy()
     md["ts"] = pd.to_datetime(md["timestamp"], errors="coerce")
     md = md.dropna(subset=["ts"]).sort_values("ts")
