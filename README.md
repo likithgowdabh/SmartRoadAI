@@ -137,7 +137,7 @@ streamlit run app.py
 
 ## 🌐 Live Demo
 
-👉 *(Paste your deployed link here)*
+https://autoheal-ai-predictive-maintenance-uczb5lxf65jsrzadgzrjdy.streamlit.app/
 
 ---
 
