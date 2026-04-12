@@ -142,7 +142,10 @@ def render_analytics_panel(
             key="analytics_time_window",
         )
     with fl2:
-        _all_series_quick = fetch_machine_series_chronological(limit=200)
+        try:
+            _all_series_quick = fetch_machine_series_chronological(limit=200)
+        except Exception:
+            _all_series_quick = pd.DataFrame(columns=["machine_id"])
         _machine_opts = ["All machines"] + (
             sorted(_all_series_quick["machine_id"].unique().tolist())
             if not _all_series_quick.empty else []
@@ -165,7 +168,11 @@ def render_analytics_panel(
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     # ── KPI cards ──────────────────────────────────────────────────────────
-    kpis = fetch_analytics_kpis()
+    try:
+        kpis = fetch_analytics_kpis()
+    except Exception:
+        kpis = {"total_readings": 0, "total_anomalies": 0,
+                "total_actions": 0, "avg_temperature": 0.0}
     n_read = max(1, int(kpis["total_readings"]))
     fail_rate = 100.0 * kpis["total_anomalies"] / n_read
 
@@ -185,7 +192,11 @@ def render_analytics_panel(
     # ── Sensor trend charts ────────────────────────────────────────────────
     st.markdown("#### 📈 Sensor Trends")
 
-    series = fetch_machine_series_chronological(limit=2000, machine_id=selected_machine)
+    try:
+        series = fetch_machine_series_chronological(limit=2000, machine_id=selected_machine)
+    except Exception as _e:
+        series = pd.DataFrame()
+        st.warning(f"⚠️ Sensor data unavailable: {_e}", icon="🔌")
     series = _filter_by_time(series, time_window)
 
     if series.empty:
@@ -225,7 +236,10 @@ def render_analytics_panel(
     bar_col, pie_col = st.columns(2)
 
     with bar_col:
-        ac = fetch_anomaly_counts_by_machine()
+        try:
+            ac = fetch_anomaly_counts_by_machine()
+        except Exception:
+            ac = pd.DataFrame()
         if ac.empty:
             st.caption("No anomaly aggregates yet — wait for a few pipeline cycles.")
         else:
@@ -249,7 +263,10 @@ def render_analytics_panel(
             st.plotly_chart(fig_b, use_container_width=True, key="analytics_anom_bar")
 
     with pie_col:
-        ad = fetch_action_distribution()
+        try:
+            ad = fetch_action_distribution()
+        except Exception:
+            ad = pd.DataFrame()
         if ad.empty:
             st.caption("No action aggregates yet.")
         else:

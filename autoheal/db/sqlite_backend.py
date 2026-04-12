@@ -158,10 +158,21 @@ def _rows_to_dataframe(rows: list[sqlite3.Row], columns: list[str]) -> pd.DataFr
 
 
 def fetch_query(query: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(query, tuple(params))
-        return cur.fetchall()
+    """Execute a SELECT query. Auto-inits the DB if tables are missing."""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, tuple(params))
+            return cur.fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            # Tables haven't been created yet — initialise and retry once.
+            init_db()
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(query, tuple(params))
+                return cur.fetchall()
+        raise
 
 
 def fetch_recent_logs(limit: int = 50) -> pd.DataFrame:
