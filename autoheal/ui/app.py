@@ -11,6 +11,8 @@ import base64
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 # ─── Audio Beep Generator (pure Python — no external deps) ────────────────────
 def _make_beep_wav(freq: float, duration: float, volume: float = 0.3,
                    sample_rate: int = 44100) -> bytes:
