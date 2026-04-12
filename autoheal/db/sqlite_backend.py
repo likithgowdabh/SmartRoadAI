@@ -249,7 +249,7 @@ def fetch_machine_series_chronological(
                 WHERE machine_id = ?
                 ORDER BY id DESC
                 LIMIT ?
-            ) AS sub
+            ) sub
             ORDER BY timestamp ASC
             """,
             (machine_id, limit),
@@ -262,7 +262,7 @@ def fetch_machine_series_chronological(
                 FROM machine_data
                 ORDER BY id DESC
                 LIMIT ?
-            ) AS sub
+            ) sub
             ORDER BY timestamp ASC
             """,
             (limit,),
