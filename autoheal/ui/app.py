@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import time
 import os
@@ -8,6 +9,7 @@ import struct
 import wave
 import io
 import base64
+import urllib.request
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
@@ -77,7 +79,7 @@ from db.database import get_history
 st.set_page_config(page_title="AutoHeal AI", layout="wide", initial_sidebar_state="expanded")
 
 # ─── Load CSS ──────────────────────────────────────────────────────────────────
-with open(os.path.join(os.path.dirname(__file__), "styles.css")) as f:
+with open(os.path.join(os.path.dirname(__file__), "styles.css"), encoding='utf-8') as f:
     st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
 # ─── Sidebar Hint (always visible for judges) ──────────────────────────────────
@@ -100,6 +102,8 @@ defaults = {
     'active_machine': 'Machine A2',
     'default_anomaly': 'Overheating',
     'chat_history': [],
+    'machine_image_url': '',
+    'machine_image_data': None,
     'machines': {
         'Machine A1': {'status': 'RUNNING', 'health': 78.0, 'risk': 'MEDIUM', 'alert': 'MEDIUM'},
         'Machine A2': {'status': 'STOPPED', 'health': 22.0, 'risk': 'HIGH',   'alert': 'CRITICAL'},
@@ -144,6 +148,7 @@ with st.sidebar:
         st.session_state.time_series = defaults['time_series']
         st.session_state.prev_health = None
 
+    st.markdown("---")
     st.markdown("---")
     st.markdown("### ⚡ Simulate Failure Scenario")
     manual_anomaly = st.selectbox(
@@ -335,6 +340,96 @@ def build_human_summary(risk, reason, result, alert_level, loss, downtime):
     s4 = why_matters.get(alert_level, "")
     return s1, s2, s3, s4
 
+
+def add_box_mesh(fig, x0, x1, y0, y1, z0, z1, color, name, opacity=0.95):
+    x = [x0, x1, x1, x0, x0, x1, x1, x0]
+    y = [y0, y0, y1, y1, y0, y0, y1, y1]
+    z = [z0, z0, z0, z0, z1, z1, z1, z1]
+    I = [0, 0, 4, 4, 0, 0, 2, 2, 0, 0, 1, 1]
+    J = [1, 2, 5, 6, 1, 5, 3, 7, 3, 7, 2, 6]
+    K = [2, 3, 6, 7, 5, 4, 7, 6, 7, 4, 6, 5]
+    fig.add_trace(go.Mesh3d(
+        x=x, y=y, z=z,
+        i=I, j=J, k=K,
+        opacity=opacity,
+        color=color,
+        name=name,
+        showscale=False,
+        flatshading=True
+    ))
+
+
+def build_machine_3d_figure(reason):
+    fig = go.Figure()
+    # base machine housing
+    add_box_mesh(fig, -0.7, 0.7, -0.4, 0.4, -0.6, 0.6, '#475569', 'Housing', opacity=0.15)
+    # stator
+    add_box_mesh(fig, -0.55, 0.55, -0.25, 0.25, -0.55, 0.55, '#38bdf8', 'Stator')
+    # rotor
+    add_box_mesh(fig, -0.22, 0.22, -0.12, 0.12, -0.6, 0.6, '#fbbf24', 'Rotor')
+    # cooling fan
+    add_box_mesh(fig, 0.75, 1.05, -0.35, 0.35, -0.25, 0.25,
+                 '#34d399' if reason != 'Overheating' else '#f43f5e', 'Cooling')
+    # power terminal
+    add_box_mesh(fig, -0.85, -0.55, 0.35, 0.65, -0.2, 0.2,
+                 '#a78bfa' if reason != 'Voltage Spike' else '#f43f5e', 'Power')
+    # motor core highlight if vibration
+    if reason == 'High Vibration':
+        add_box_mesh(fig, -0.55, 0.55, -0.25, 0.25, -0.55, 0.55,
+                     '#f43f5e', 'Motor Highlight', opacity=0.2)
+
+    label_color = '#f8fafc'
+    fig.add_trace(go.Scatter3d(
+        x=[0.9, -0.7, 0.0],
+        y=[0.4, 0.8, -0.5],
+        z=[0.4, 0.0, -0.6],
+        mode='text',
+        text=[
+            'Cooling',
+            'Power Input',
+            'Rotor / Stator'
+        ],
+        textfont=dict(color=label_color, size=10)
+    ))
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(title='X', visible=False, showgrid=False, zeroline=False),
+            yaxis=dict(title='Y', visible=False, showgrid=False, zeroline=False),
+            zaxis=dict(title='Z', visible=False, showgrid=False, zeroline=False),
+            camera=dict(eye=dict(x=1.6, y=1.2, z=0.8))
+        ),
+        margin=dict(l=0, r=0, t=10, b=0),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        showlegend=False,
+        height=300
+    )
+    return fig
+
+
+def url_to_data_uri(url: str) -> str:
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'
+    })
+    with urllib.request.urlopen(req, timeout=15) as response:
+        content_type = response.headers.get_content_type()
+        data = response.read()
+    if not content_type.startswith('image/'):
+        raise ValueError('URL did not return an image')
+    encoded = base64.b64encode(data).decode('utf-8')
+    return f'data:{content_type};base64,{encoded}'
+
+
+def load_electric_motor_3d() -> str:
+    """Load the electric motor 3D animation HTML."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "electric_motor_3d.html"), 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
 sum_s1, sum_s2, sum_s3, sum_s4 = build_human_summary(risk, reason, result, alert_level, loss, downtime)
 summary_icon = "⛔" if alert_level == "CRITICAL" else ("⚠️" if risk in ["HIGH","MEDIUM"] else "✅")
 
@@ -456,6 +551,27 @@ for i, (mname, mdata) in enumerate(st.session_state.machines.items()):
         "LOW":      "All systems normal",
     }.get(mdata['alert'], "")
 
+    # Determine failure reason for highlighting
+    if is_active:
+        machine_reason = reason
+    else:
+        reason_map = {
+            "CRITICAL": "Voltage Spike",
+            "HIGH":     "Overheating",
+            "MEDIUM":   "High Vibration",
+            "LOW":      "Normal"
+        }
+        machine_reason = reason_map.get(mdata['alert'], "Normal")
+
+    # Determine which part to highlight
+    highlight_part = ""
+    if machine_reason == "Overheating":
+        highlight_part = "cooling"
+    elif machine_reason == "High Vibration":
+        highlight_part = "motor"
+    elif machine_reason == "Voltage Spike":
+        highlight_part = "power"
+
     with machine_cols[i]:
         st.markdown(f"""
         <div class='machine-tile' style='{border_style}'>
@@ -463,6 +579,11 @@ for i, (mname, mdata) in enumerate(st.session_state.machines.items()):
             <div class='machine-health' style='color:{mc}'>{mdata['health']:.0f}%</div>
             <div class='machine-status' style='color:{mc}'>{mdata['alert']}</div>
             <div class='machine-sub'>{health_sub}</div>
+            <div class='machine-diagram'>
+                <div class='machine-part motor{" highlight" if highlight_part == "motor" else ""}'></div>
+                <div class='machine-part cooling{" highlight" if highlight_part == "cooling" else ""}'></div>
+                <div class='machine-part power{" highlight" if highlight_part == "power" else ""}'></div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
@@ -591,6 +712,10 @@ with m1:
         </div>
     </div>""", unsafe_allow_html=True)
 
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    fig_machine = build_machine_3d_figure(reason)
+    st.plotly_chart(fig_machine, use_container_width=True, config={"displayModeBar": False}, key="machine_3d_chart")
+
 with m2:
     actions_done = []
     if "shutdown" in result.lower():
@@ -675,10 +800,32 @@ with app_col:
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-# ─── GRAPH + ACTIVITY LOG ─────────────────────────────────────────────────────
-g1, g2 = st.columns([2, 1])
+st.markdown("""
+<div class='section-header'>
+    <span class='section-icon'>⚙️</span>
+    <span class='section-title'>Electric Motor 3D Animation</span>
+    <span class='section-sub'>Embedded Three.js motor model inside Streamlit</span>
+</div>
+""", unsafe_allow_html=True)
 
-with g1:
+st.markdown("""
+<div class='apple-card' style='padding: 0; overflow: hidden;'>
+""", unsafe_allow_html=True)
+
+motor_html = load_electric_motor_3d()
+if motor_html:
+    components.html(motor_html, height=700)
+else:
+    st.warning("⚠️ Unable to load Electric Motor 3D animation. Make sure electric_motor_3d.html exists in the ui folder.")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+# ─── GRAPH + ACTIVITY LOG ─────────────────────────────────────────────────────
+g_main1, g_main2 = st.columns([2, 1])
+
+with g_main1:
     st.markdown("<div class='apple-card graph-card'>", unsafe_allow_html=True)
     # Live analyzing badge
     _analyzing_label = (
@@ -695,59 +842,119 @@ with g1:
 
     ts = st.session_state.time_series
     if not ts.empty:
-        fig = go.Figure()
+        # Create tabs for 2D and 3D views
+        tab1, tab2 = st.tabs(["📈 2D Time Series", "🔺 3D Feature Space"])
+        
+        with tab1:
+            fig = go.Figure()
 
-        # Temperature area
-        fig.add_trace(go.Scatter(
-            x=ts["timestamp"], y=ts["temp"],
-            name="Temperature (°C)",
-            line=dict(color="#38bdf8", width=2.5),
-            mode="lines", fill="tozeroy",
-            fillcolor="rgba(56,189,248,0.05)"
-        ))
-
-        # Vibration dashed
-        fig.add_trace(go.Scatter(
-            x=ts["timestamp"], y=ts["vibration"],
-            name="Vibration ×30",
-            line=dict(color="#a78bfa", width=2, dash="dot"),
-            mode="lines"
-        ))
-
-        # Danger threshold
-        fig.add_hline(
-            y=85, line_dash="dash",
-            line_color="rgba(244,63,94,0.55)",
-            annotation_text="⚠ Danger Zone (85°C)",
-            annotation_position="top right",
-            annotation_font_color="#f87171"
-        )
-
-        # 🔴 Anomaly markers — red filled circle
-        anomaly_ts = ts[ts["anomaly"] == 1]
-        if not anomaly_ts.empty:
+            # Temperature area
             fig.add_trace(go.Scatter(
-                x=anomaly_ts["timestamp"], y=anomaly_ts["temp"],
-                mode="markers",
-                name="🔴 Anomaly",
-                marker=dict(color="#f43f5e", size=12, symbol="circle",
-                            line=dict(width=2, color="#fff"))
+                x=ts["timestamp"], y=ts["temp"],
+                name="Temperature (°C)",
+                line=dict(color="#60a5fa", width=3.2, shape="spline"),
+                mode="lines",
+                fill="tozeroy",
+                fillcolor="rgba(96,165,250,0.18)",
+                hovertemplate="%{x}<br><b>Temperature</b>: %{y:.1f}°C<extra></extra>"
             ))
 
-        fig.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Inter", color="#94a3b8", size=11),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                        xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#94a3b8")),
-            margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(showgrid=False, zeroline=False, color="#475569"),
-            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.04)",
-                       zeroline=False, color="#475569"),
-            height=280,
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            # Vibration dashed
+            fig.add_trace(go.Scatter(
+                x=ts["timestamp"], y=ts["vibration"],
+                name="Vibration ×30",
+                line=dict(color="#c4b5fd", width=2.4, dash="dash"),
+                mode="lines",
+                hovertemplate="%{x}<br><b>Vibration</b>: %{y:.1f}<extra></extra>"
+            ))
+
+            # Danger threshold
+            fig.add_hline(
+                y=85, line_dash="dash",
+                line_color="#f87171",
+                annotation_text="⚠ Danger Zone (85°C)",
+                annotation_position="top right",
+                annotation_font_color="#f87171"
+            )
+
+            # 🔴 Anomaly markers — red filled circle
+            anomaly_ts = ts[ts["anomaly"] == 1]
+            if not anomaly_ts.empty:
+                fig.add_trace(go.Scatter(
+                    x=anomaly_ts["timestamp"], y=anomaly_ts["temp"],
+                    mode="markers",
+                    name="🔴 Anomaly",
+                    marker=dict(color="#f43f5e", size=12, symbol="circle",
+                                line=dict(width=2, color="#0f172a"))
+                ))
+
+            fig.update_layout(
+                plot_bgcolor="rgba(15,23,42,0.3)",
+                paper_bgcolor="rgba(15,23,42,0.18)",
+                font=dict(family="Inter", color="#cbd5e1", size=11),
+                legend=dict(orientation="h", yanchor="bottom", y=1.08,
+                            xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
+                            font=dict(color="#cbd5e1")),
+                hovermode="x unified",
+                margin=dict(l=0, r=0, t=30, b=0),
+                xaxis=dict(showgrid=False, zeroline=False, showline=True,
+                           linecolor="rgba(148,163,184,0.25)", color="#cbd5e1",
+                           tickfont=dict(color="#cbd5e1")),
+                yaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.12)",
+                           zeroline=False, linecolor="rgba(148,163,184,0.2)",
+                           color="#cbd5e1", tickfont=dict(color="#cbd5e1")),
+                height=280,
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="graph_2d_timeseries")
+        
+        with tab2:
+            fig3d = go.Figure()
+
+            # Normal points
+            normal_ts = ts[ts["anomaly"] == 0]
+            if not normal_ts.empty:
+                fig3d.add_trace(go.Scatter3d(
+                    x=normal_ts["temp"], y=normal_ts["vibration"], z=normal_ts["voltage"],
+                    mode="markers",
+                    name="Normal",
+                    marker=dict(color="#38bdf8", size=6, opacity=0.7)
+                ))
+
+            # Anomaly points
+            if not anomaly_ts.empty:
+                fig3d.add_trace(go.Scatter3d(
+                    x=anomaly_ts["temp"], y=anomaly_ts["vibration"], z=anomaly_ts["voltage"],
+                    mode="markers",
+                    name="🔴 Anomaly",
+                    marker=dict(color="#f43f5e", size=10, symbol="diamond",
+                                line=dict(width=2, color="#fff"))
+                ))
+
+            # Add planes for thresholds
+            # Temperature threshold plane
+            fig3d.add_trace(go.Mesh3d(
+                x=[85, 85, 85, 85], y=[ts["vibration"].min(), ts["vibration"].max(), ts["vibration"].max(), ts["vibration"].min()],
+                z=[ts["voltage"].min(), ts["voltage"].min(), ts["voltage"].max(), ts["voltage"].max()],
+                opacity=0.1, color='red', name="Temp Danger Zone"
+            ))
+
+            fig3d.update_layout(
+                scene=dict(
+                    xaxis_title="Temperature (°C)",
+                    yaxis_title="Vibration ×30",
+                    zaxis_title="Voltage (V)",
+                    xaxis=dict(backgroundcolor="rgba(0,0,0,0)", gridcolor="rgba(255,255,255,0.1)"),
+                    yaxis=dict(backgroundcolor="rgba(0,0,0,0)", gridcolor="rgba(255,255,255,0.1)"),
+                    zaxis=dict(backgroundcolor="rgba(0,0,0,0)", gridcolor="rgba(255,255,255,0.1)"),
+                ),
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#94a3b8", size=11),
+                legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#94a3b8")),
+                margin=dict(l=0, r=0, t=30, b=0),
+                height=280,
+            )
+            st.plotly_chart(fig3d, use_container_width=True, config={"displayModeBar": False}, key="graph_3d_featurespace")
     else:
         st.markdown("""
         <div class='empty-state-msg'>
@@ -758,7 +965,7 @@ with g1:
         """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-with g2:
+with g_main2:
     st.markdown("<div class='apple-card' style='padding:22px; overflow-y:hidden;'>",
                 unsafe_allow_html=True)
     st.markdown("<div class='card-label'>📋 Activity Timeline</div>", unsafe_allow_html=True)
