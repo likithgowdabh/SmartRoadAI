@@ -306,6 +306,7 @@ def render_analytics_panel(
         "estimated_ttf_hours": "N/A",
         "source": "unavailable",
         "warn": False,
+        "message": "Prediction unavailable — run a few pipeline cycles to collect data.",
     }
     try:
         pred = predict_for_machine(
