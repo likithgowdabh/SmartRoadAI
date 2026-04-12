@@ -73,7 +73,22 @@ def play_alert(level: str):
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import run_pipeline
-from db.database import get_history
+from db.database import (
+    backend_name,
+    fetch_recent_actions,
+    fetch_recent_anomalies,
+    get_history,
+)
+from ui.analytics_sections import render_analytics_panel
+
+# Config (graceful fallback if config.py absent)
+try:
+    from config import cfg as _cfg
+    _BACKEND_DISPLAY = _cfg.backend_display_name
+    _BACKEND_ICON    = _cfg.backend_icon
+except Exception:
+    _BACKEND_DISPLAY = backend_name().title()
+    _BACKEND_ICON    = "🗄️"
 
 # ─── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="AutoHeal AI", layout="wide", initial_sidebar_state="expanded")
@@ -185,6 +200,26 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    # ── Backend connection badge ────────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="
+            display:flex;align-items:center;gap:8px;
+            background:rgba(56,189,248,0.07);
+            border:1px solid rgba(56,189,248,0.2);
+            border-radius:10px;padding:8px 12px;margin-bottom:10px;
+        ">
+            <span style='font-size:1.1rem;'>{_BACKEND_ICON}</span>
+            <div>
+                <div style='font-size:0.65rem;color:#64748b;
+                            text-transform:uppercase;letter-spacing:0.07em;'>Connected to</div>
+                <div style='font-size:0.82rem;font-weight:700;color:#38bdf8;'>{_BACKEND_DISPLAY}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.markdown("""
     <div class='ai-tag'>
         <span class='ai-dot'></span>
@@ -196,7 +231,10 @@ with st.sidebar:
 
 # ─── Run Pipeline ──────────────────────────────────────────────────────────────
 try:
-    df, state = run_pipeline(manual_anomaly=trigger)
+    df, state = run_pipeline(
+        manual_anomaly=trigger,
+        machine_id=st.session_state.active_machine,
+    )
 except Exception as e:
     st.error(f"Pipeline Error: {e}")
     st.stop()
@@ -508,6 +546,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ─── ANALYTICS & FAILURE FORECAST (SQLite / Firestore + ML) ───────────────────
+with st.expander("📊 Analytics dashboard & failure forecast", expanded=False):
+    render_analytics_panel(
+        st.session_state.active_machine,
+        temp_val,
+        vib_val,
+        volt_val,
+    )
+
 # ─── ALERT BANNER + SOUND ─────────────────────────────────────────────────────
 # Only play sound when the alert level *changes* (not every refresh cycle)
 _prev_alert = st.session_state.get('_prev_alert_level', None)
@@ -679,6 +726,64 @@ with c5_top:
             <span style='color:#64748b; font-size:0.75rem; margin-left:8px;'>Conf: {ai_conf}%</span>
         </div>
     </div>""", unsafe_allow_html=True)
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# ─── AI FAILURE RISK PREDICTION BANNER (always visible) ───────────────────
+# Compute fast heuristic prediction from live sensor values (no DB call)
+_raw_fp = 0.12
+if temp_val > 88:  _raw_fp += 0.35
+elif temp_val > 80: _raw_fp += 0.18
+if vib_val > 1.2:  _raw_fp += 0.28
+elif vib_val > 0.85: _raw_fp += 0.12
+if volt_val > 275: _raw_fp += 0.15
+if anomaly_flag == 1: _raw_fp += 0.15
+_pred_pct   = round(min(95.0, _raw_fp * 100.0), 1)
+_pred_tier  = "CRITICAL" if _pred_pct >= 80 else ("HIGH" if _pred_pct >= 55 else ("MEDIUM" if _pred_pct >= 30 else "LOW"))
+_pred_clr   = {"CRITICAL": "#f43f5e", "HIGH": "#fb923c", "MEDIUM": "#fbbf24", "LOW": "#34d399"}.get(_pred_tier, "#34d399")
+_pred_icon  = {"CRITICAL": "⛔", "HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(_pred_tier, "🟢")
+_ttf_quick  = f"{failure_str}"
+_bar_w      = max(4, int(_pred_pct))
+
+st.markdown(f"""
+<div style="
+    background:linear-gradient(135deg,rgba(15,23,42,0.95),rgba(30,41,59,0.8));
+    border:1px solid {_pred_clr}44;
+    border-left:4px solid {_pred_clr};
+    border-radius:14px; padding:18px 22px; margin-bottom:4px;
+    box-shadow:0 4px 20px rgba(0,0,0,0.35);
+">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div>
+            <div style="font-size:0.68rem;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.09em;margin-bottom:3px;">🤖 AI Failure Risk (live estimate)</div>
+            <div style="font-size:2.6rem;font-weight:800;color:{_pred_clr};
+                        font-family:'Inter',sans-serif;line-height:1;">{_pred_pct}%</div>
+            <div style="font-size:0.8rem;color:{_pred_clr};font-weight:600;margin-top:2px;">
+                {_pred_icon} {_pred_tier} RISK
+            </div>
+        </div>
+        <div style="flex:1;min-width:180px;">
+            <div style="background:rgba(15,23,42,0.7);border-radius:8px;overflow:hidden;
+                        height:10px;margin-bottom:8px;">
+                <div style="width:{_bar_w}%;height:100%;background:{_pred_clr};
+                            border-radius:8px;transition:width 0.4s ease;"></div>
+            </div>
+            <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                <div><span style="font-size:0.68rem;color:#64748b;">Est. Time to Failure</span>
+                     <div style="font-size:0.9rem;color:#e2e8f0;font-weight:600;">{_ttf_quick}</div></div>
+                <div><span style="font-size:0.68rem;color:#64748b;">Anomaly Detected</span>
+                     <div style="font-size:0.9rem;color:{'#f87171' if anomaly_flag==1 else '#34d399'};font-weight:600;">
+                         {'YES ⚠️' if anomaly_flag==1 else 'NO ✅'}</div></div>
+                <div><span style="font-size:0.68rem;color:#64748b;">Root Cause</span>
+                     <div style="font-size:0.9rem;color:#fbbf24;font-weight:600;">{reason.split(' | ')[0]}</div></div>
+                <div><span style="font-size:0.68rem;color:#64748b;">AI Action</span>
+                     <div style="font-size:0.9rem;color:#38bdf8;font-weight:600;">{result or 'Monitoring'}</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -969,54 +1074,108 @@ with g_main2:
     st.markdown("<div class='apple-card' style='padding:22px; overflow-y:hidden;'>",
                 unsafe_allow_html=True)
     st.markdown("<div class='card-label'>📋 Activity Timeline</div>", unsafe_allow_html=True)
+    st.caption(f"Persisted to **{_BACKEND_DISPLAY}** — latest pipeline cycles.")
 
     history = get_history(8)
-    # Map raw action tokens → clean label + icon
-    action_icon_map = [
-        ("shutdown",      "⛔", "Machine shutdown initiated"),
-        ("cooling activ", "❄️", "Cooling system activated"),
-        ("cooling",       "❄️", "Cooling system activated"),
-        ("load_reduce",   "📉", "Load reduced to safe level"),
-        ("load reduced",  "📉", "Load reduced to safe level"),
-        ("anomaly",       "⚡", "Anomaly detected"),
-        ("fan speed",     "🌀", "Fan speed increased"),
-        ("coolant",       "💧", "Coolant flow increased"),
-        ("no action",     "✅", "System operating normally"),
-    ]
+    if history.empty:
+        st.markdown("""
+        <div style='padding:18px;text-align:center;color:#475569;font-size:0.85rem;'>
+            📂 No pipeline history yet — wait one auto-refresh cycle.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        action_icon_map = [
+            ("shutdown",      "⛔", "Machine shutdown initiated"),
+            ("cooling activ", "❄️", "Cooling system activated"),
+            ("cooling",       "❄️", "Cooling system activated"),
+            ("load_reduce",   "📉", "Load reduced to safe level"),
+            ("load reduced",  "📉", "Load reduced to safe level"),
+            ("anomaly",       "⚡", "Anomaly detected"),
+            ("fan speed",     "🌀", "Fan speed increased"),
+            ("coolant",       "💧", "Coolant flow increased"),
+            ("no action",     "✅", "System operating normally"),
+        ]
 
-    html_logs = "<div style='display:flex; flex-direction:column; gap:7px; margin-top:10px;'>"
-    for _, row in history.iterrows():
-        r_color = "#34d399" if row['risk'] == "LOW" else (
-            "#fbbf24" if row['risk'] == "MEDIUM" else "#f87171")
-        ts_time = row['timestamp'].split()[1] if ' ' in row['timestamp'] else row['timestamp']
-        raw_act = (row['action'] or "System checked").strip()
+        html_logs = "<div style='display:flex; flex-direction:column; gap:7px; margin-top:10px;'>"
+        for _, row in history.iterrows():
+            r_color = "#34d399" if row['risk'] == "LOW" else (
+                "#fbbf24" if row['risk'] == "MEDIUM" else "#f87171")
+            _ts = str(row['timestamp'])
+            ts_time = _ts.split()[1] if ' ' in _ts else _ts
+            raw_act = (str(row['action']) if row['action'] else "System checked").strip()
 
-        # Match icon + clean label
-        log_icon  = "📋"
-        clean_act = raw_act
-        for key, icon, label in action_icon_map:
-            if key in raw_act.lower():
-                log_icon  = icon
-                clean_act = label
-                break
+            # Match icon + clean label
+            log_icon  = "📋"
+            clean_act = raw_act
+            for key, icon, label in action_icon_map:
+                if key in raw_act.lower():
+                    log_icon  = icon
+                    clean_act = label
+                    break
 
-        # Risk icon
-        risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "⛔"}.get(
-            row['risk'], "⚪")
+            risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "⛔"}.get(
+                str(row['risk']), "⚪")
 
-        html_logs += f"""
-        <div class='log-entry'>
-            <div class='log-header'>
-                <span class='log-time'>{ts_time}</span>
-                <span class='log-risk' style='color:{r_color}'>{risk_icon} {row['risk']}</span>
-            </div>
-            <div class='log-action'><span class='log-icon'>{log_icon}</span>{clean_act}</div>
-        </div>"""
-    html_logs += "</div>"
-    st.markdown(html_logs, unsafe_allow_html=True)
+            html_logs += f"""
+            <div class='log-entry'>
+                <div class='log-header'>
+                    <span class='log-time'>{ts_time}</span>
+                    <span class='log-risk' style='color:{r_color}'>{risk_icon} {row['risk']}</span>
+                </div>
+                <div class='log-action'><span class='log-icon'>{log_icon}</span>{clean_act}</div>
+            </div>"""
+        html_logs += "</div>"
+        st.markdown(html_logs, unsafe_allow_html=True)
+
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-label'>⚠️ Recent anomalies (DB)</div>", unsafe_allow_html=True)
+    anomalies_df = fetch_recent_anomalies(8)
+    if anomalies_df.empty:
+        st.caption("No anomaly rows yet — run a few cycles or simulate a failure.")
+    else:
+        show_a = anomalies_df.drop(columns=["id"], errors="ignore").copy()
+        st.dataframe(
+            show_a,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "machine_id": st.column_config.TextColumn("Machine"),
+                "type": st.column_config.TextColumn("Type"),
+                "severity": st.column_config.TextColumn("Severity"),
+                "timestamp": st.column_config.TextColumn("Time"),
+            },
+        )
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-label'>⚡ Recent actions (DB)</div>", unsafe_allow_html=True)
+    actions_df = fetch_recent_actions(8)
+    if actions_df.empty:
+        st.caption("No action rows yet.")
+    else:
+        show_act = actions_df.drop(columns=["id"], errors="ignore").copy()
+        st.dataframe(
+            show_act,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "machine_id": st.column_config.TextColumn("Machine"),
+                "action_taken": st.column_config.TextColumn("Action"),
+                "timestamp": st.column_config.TextColumn("Time"),
+            },
+        )
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+# ─── DEMO BANNER ──────────────────────────────────────────────────────────────
+st.info(
+    "🚀 **Try the live demo:** Open the sidebar → select a machine → inject an anomaly "
+    "(Overheating / High Vibration / Voltage Spike) → watch AutoHeal AI detect, decide, "
+    "and act autonomously in real-time.",
+    icon="💡",
+)
 
 # ─── CHAT ASSISTANT ───────────────────────────────────────────────────────────
 st.markdown("""
@@ -1134,8 +1293,12 @@ if st.session_state.chat_history:
 # Input row
 col_q, col_btn = st.columns([5, 1])
 with col_q:
-    user_q = st.text_input("", placeholder="e.g. Is the machine safe?  |  When will it fail?  |  What action was taken?",
-                           label_visibility="collapsed", key="chat_input")
+    user_q = st.text_input(
+        "Ask the AI assistant",
+        placeholder="e.g. Is the machine safe?  |  When will it fail?  |  What action was taken?",
+        label_visibility="collapsed",
+        key="chat_input",
+    )
 with col_btn:
     send = st.button("Ask ➜", use_container_width=True)
 
