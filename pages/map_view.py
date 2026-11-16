@@ -1,10 +1,12 @@
 """
 SmartRoad AI — Interactive Road Intelligence Map
-Leaflet map with CartoDB Positron tiles, severity pins, and incident detail inspector.
+Zero-API-key Leaflet GIS map with OpenStreetMap, Esri Gray Canvas, and 3D Risk Density.
 """
 
 import streamlit as st
 import streamlit.components.v1 as components
+import pandas as pd
+import pydeck as pdk
 from components.ui import render_page_header, render_badge, render_html
 from components.icons import get_icon
 from components.map_component import render_apple_road_map
@@ -14,7 +16,8 @@ def render_map_page():
     """Renders the GIS road damage monitoring view."""
     render_html(render_page_header(
         title="Road Map",
-        subtitle="Geospatial distribution of road hazards and active repair zones."
+        subtitle="Geospatial distribution of road hazards, damage severity, and active repair zones.",
+        tag="100% Free • Zero API Key"
     ))
 
     # Filter Toolbar
@@ -39,7 +42,7 @@ def render_map_page():
 
     # Visual Legend
     render_html(f"""
-    <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 12px; font-size: 12.5px; color: #6E6E73;">
+    <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 12px; font-size: 12.5px; color: #6E6E73; flex-wrap: wrap;">
         <span style="display: inline-flex; align-items: center; gap: 6px;">
             <span style="width: 10px; height: 10px; border-radius: 50%; background: #D70015;"></span> Critical Hazard
         </span>
@@ -52,13 +55,66 @@ def render_map_page():
         <span style="display: inline-flex; align-items: center; gap: 6px;">
             <span style="width: 10px; height: 10px; border-radius: 50%; background: #0071E3;"></span> Restored / Repaired
         </span>
-        <span style="margin-left: auto; color: #86868B;">Showing {len(reports)} monitored incidents</span>
+        <span style="margin-left: auto; color: #86868B;">Showing {len(reports)} monitored incidents • Layer Switcher in Top Right</span>
     </div>
     """)
 
-    # Render Leaflet Map
-    map_html = render_apple_road_map(reports, center_lat=12.9450, center_lon=77.6250, zoom=12, height=520)
-    components.html(map_html, height=530)
+    tab_gis, tab_3d = st.tabs(["Interactive Leaflet Map (Street / Gray / Satellite)", "3D Priority Scatter View"])
+
+    with tab_gis:
+        # Render Zero-API-Key Leaflet Map
+        map_html = render_apple_road_map(reports, center_lat=12.9450, center_lon=77.6250, zoom=12, height=520)
+        components.html(map_html, height=530)
+
+    with tab_3d:
+        # 3D PyDeck Map (Zero API Key required, native hardware acceleration)
+        map_data = []
+        for r in reports:
+            lat = r.get("latitude")
+            lon = r.get("longitude")
+            if lat and lon:
+                sev = r.get("severity", "Medium")
+                # RGB mapping
+                rgb = [215, 0, 21, 200] if sev == "Critical" else ([184, 121, 0, 200] if sev == "Medium" else [36, 138, 61, 200])
+                map_data.append({
+                    "name": r.get("road_name"),
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "priority": float(r.get("priority_score", 50.0)),
+                    "color": rgb,
+                    "radius": max(60, float(r.get("priority_score", 50.0)) * 2.2)
+                })
+
+        if map_data:
+            df_map = pd.DataFrame(map_data)
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                df_map,
+                get_position=["lon", "lat"],
+                get_color="color",
+                get_radius="radius",
+                pickable=True,
+                opacity=0.85,
+                stroked=True,
+                filled=True,
+                radius_scale=1,
+                radius_min_pixels=6,
+                radius_max_pixels=32,
+                line_width_min_pixels=1.5
+            )
+            view_state = pdk.ViewState(
+                latitude=df_map["lat"].mean(),
+                longitude=df_map["lon"].mean(),
+                zoom=11.5,
+                pitch=35
+            )
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=[layer],
+                    initial_view_state=view_state,
+                    tooltip={"text": "{name}\nPriority Score: {priority}"}
+                )
+            )
 
     # Side-by-side Inspector Panel below the map
     render_html("<div style='height: 20px;'></div>")
