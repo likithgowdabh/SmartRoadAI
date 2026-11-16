@@ -39,24 +39,68 @@ class PotholeDetector:
         self.model_path = model_path
         self._model = None
         self._is_yolo_available = False
+        self._env_error = None
         self._check_environment()
 
     def _check_environment(self):
         """Verifies ultralytics library and model weights availability."""
         try:
+            # Pre-import cv2 headless safely
+            try:
+                import cv2
+            except Exception:
+                pass
             import ultralytics
             self._is_yolo_available = True
-        except Exception:
+            self._env_error = None
+        except Exception as e:
             self._is_yolo_available = False
+            self._env_error = str(e)
+
+    def _find_weights_file(self) -> Optional[str]:
+        """Searches multiple paths to locate the pothole weights file."""
+        candidates = [
+            self.model_path,
+            os.path.abspath(self.model_path),
+            os.path.join(os.getcwd(), "models", "pothole_best.pt"),
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "pothole_best.pt"),
+            "models/pothole_best.pt"
+        ]
+        for p in candidates:
+            if p and os.path.exists(p) and os.path.getsize(p) > 1000:
+                return os.path.abspath(p)
+        return None
+
+    def _ensure_weights(self) -> Optional[str]:
+        """Locates weights or auto-downloads from GitHub repository if in cloud runtime."""
+        p = self._find_weights_file()
+        if p:
+            return p
+            
+        target = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "pothole_best.pt")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        url = "https://raw.githubusercontent.com/likithgowdabh/SmartRoadAI/main/models/pothole_best.pt"
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp, open(target, "wb") as f:
+                f.write(resp.read())
+            if os.path.exists(target) and os.path.getsize(target) > 1000:
+                self.model_path = target
+                return target
+        except Exception:
+            pass
+        return None
 
     @property
     def is_weights_present(self) -> bool:
-        return os.path.exists(self.model_path) and os.path.getsize(self.model_path) > 1000
+        return self._find_weights_file() is not None
 
     def get_system_status(self) -> Dict[str, Any]:
         """Returns comprehensive diagnostic info on AI engine readiness."""
-        weights_exist = self.is_weights_present
-        size_bytes = os.path.getsize(self.model_path) if weights_exist else 0
+        weights_path = self._find_weights_file()
+        weights_exist = weights_path is not None
+        size_bytes = os.path.getsize(weights_path) if weights_exist else 0
         size_mb = round(size_bytes / (1024 * 1024), 2)
         
         is_ready = self._is_yolo_available and weights_exist
@@ -64,30 +108,35 @@ class PotholeDetector:
         return {
             "yolo_installed": self._is_yolo_available,
             "weights_exist": weights_exist,
-            "model_path": self.model_path,
+            "model_path": weights_path or self.model_path,
             "weights_size_bytes": size_bytes,
             "weights_size_mb": size_mb,
             "architecture": "YOLO Road Intelligence Neural Network",
             "precision": "FP32 Vectorized Tensors",
             "benchmark_dataset": "RDD2022 Municipal Asphalt Benchmark",
             "status": "ready" if is_ready else "unconfigured",
+            "error_detail": self._env_error,
             "message": (
                 f"YOLO Neural Network Active ({size_mb} MB weights loaded). Municipal production ready."
                 if is_ready else
-                "AI engine initializing."
+                (f"AI Engine loading: {self._env_error}" if self._env_error else "AI Engine initializing weights.")
             )
         }
 
     def load_model(self):
         """Loads and caches custom YOLO weights."""
         if not self._is_yolo_available:
-            raise RuntimeError("Ultralytics package not installed in Python environment.")
-        if not self.is_weights_present:
+            self._check_environment()
+        if not self._is_yolo_available:
+            raise RuntimeError(f"Ultralytics runtime unavailable: {self._env_error}")
+        
+        weights_path = self._ensure_weights()
+        if not weights_path:
             raise FileNotFoundError(f"Pothole model weights not found at: {self.model_path}")
         
         from ultralytics import YOLO
         if self._model is None:
-            self._model = YOLO(self.model_path)
+            self._model = YOLO(weights_path)
         return self._model
 
     def detect(

@@ -53,11 +53,18 @@ def render_detection_page(user_session: dict):
         </div>
         """)
     else:
+        err_msg = status_info.get("error_detail") or status_info.get("message") or "Model weights initializing"
         render_html(f"""
         <div class="apple-card" style="padding: 16px 20px; margin-bottom: 24px; border-left: 4px solid #0071E3; background: #FAFAFC;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                {get_icon("scan-search", size=18, color="#0071E3")}
-                <strong style="font-size: 14px; color: #1D1D1F;">AI Model Initializing</strong>
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    {get_icon("scan-search", size=20, color="#0071E3")}
+                    <div>
+                        <strong style="font-size: 14.5px; color: #1D1D1F;">AI Model Initializing</strong>
+                        <div style="font-size: 12px; color: #6E6E73; margin-top: 2px;">{err_msg}</div>
+                    </div>
+                </div>
+                <span class="apple-badge apple-badge-neutral" style="font-size: 11px;">Auto-configuring weights</span>
             </div>
         </div>
         """)

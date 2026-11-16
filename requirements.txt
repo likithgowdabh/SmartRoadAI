@@ -10,6 +10,7 @@ scipy>=1.11.0
 python-dotenv>=1.0.0
 
 # Computer Vision & AI Frameworks
+opencv-python-headless
 ultralytics>=8.3.0
 torch>=2.2.0
 torchvision>=0.17.0
