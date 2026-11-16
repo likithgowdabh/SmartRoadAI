@@ -1,0 +1,3 @@
+# This directory stores the custom trained YOLO11 model weights:
+# models/pothole_best.pt
+# Generated via training/train_yolo.py or training/smartroad_yolo11_colab.ipynb

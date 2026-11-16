@@ -1,24 +1,43 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
 env/
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git
-.mypy_cache
-.pytest_cache
-.hypothesis
+.venv*/
+
+# Environments
+.env
+.env.local
+
+# Untracked previous project
+autoheal/
+
+# Databases & Local Cache
+*.db-journal
+*.db-wal
+*.db-shm
+tests/test_smartroad.db
+
+# Uploads & Temp Assets (keep sample assets)
+assets/uploads/
+assets/annotated/
+!assets/sample_*.jpg
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Datasets & Large Weights
+datasets/
+runs/
+tools/
+git.cmd
+powershell.cmd
+!models/pothole_best.pt
+
+# OS
 .DS_Store
-.vscode/
+Thumbs.db
